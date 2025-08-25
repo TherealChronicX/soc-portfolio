@@ -1,0 +1,16 @@
+# secrets & noisy stuff
+*.ovpn
+*.pcap*
+*.log
+*.tmp
+*.bak
+# big binaries (optional if using LFS)
+*.png
+*.jpg
+*.jpeg
+*.gif
+# editor/project cruft
+.obsidian/
+.vscode/
+.idea/
+.DS_Store
