@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# === paths ===
+ROOT="${HOME}/Cyber_Portfolio/SOC_LV1"
+CURRENT_FILE="${ROOT}/.current_room"
+DOWNLOADS="${HOME}/Downloads"
+TRASH="${HOME}/.local/share/Trash/files"
+
+# room dirs to ignore in picker
+IGNORE_REGEX='(^\.git$|^_templates$|^evidence$)'
+
+# ---- helpers ----
+say() { printf "[*] %s\n" "$*"; }
+ok()  { printf "[OK] %s\n" "$*"; }
+err() { printf "[ERR] %s\n" "$*" >&2; }
+
+rooms_list() {
+  find "$ROOT" -maxdepth 1 -mindepth 1 -type d -printf "%f\n" \
+    | grep -Ev "$IGNORE_REGEX" \
+    | sort
+}
+
+ensure_room_dir() {
+  local room="$1"
+  mkdir -p "$ROOT/$room/evidence"
+  echo "$room" > "$CURRENT_FILE"
+  ok "Current room set: $room"
+}
+
+pick_room() {
+  local default=""
+  [[ -f "$CURRENT_FILE" ]] && default="$(cat "$CURRENT_FILE")"
+
+  mapfile -t rooms < <(rooms_list)
+  if ((${#rooms[@]}==0)); then
+    read -rp "No rooms yet. New room name: " rn
+    ensure_room_dir "$rn"
+    echo "$rn"
+    return
+  fi
+
+  echo "Select a room:"
+  local i=1
+  for r in "${rooms[@]}"; do
+    [[ "$r" == "$default" ]] && tag=" (current)" || tag=""
+    printf "  %2d) %s%s\n" "$i" "$r" "$tag"
+    ((i++))
+  done
+  printf "  %2d) %s\n" "$i" "[Create new room]"
+  read -rp "Choice: " pick
+
+  if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick>=1 && pick<=i )); then
+    if (( pick==i )); then
+      read -rp "New room name: " rn
+      ensure_room_dir "$rn"
+      echo "$rn"
+    else
+      local sel="${rooms[$((pick-1))]}"
+      echo "$sel" > "$CURRENT_FILE"
+      echo "$sel"
+    fi
+  else
+    err "Invalid choice"; pick_room
+  fi
+}
+
+copy_from_dir() {
+  local src="$1" dest="$2"
+  shopt -s nullglob nocaseglob
+  local moved=0
+  for f in "$src"/*.{png,jpg,jpeg,webp,gif,pdf,eml,txt,zip,scr,doc,docx,xls,xlsx}; do
+    [[ -e "$f" ]] || continue
+    cp -v -- "$f" "$dest/" && moved=1 || true
+  done
+  shopt -u nullglob nocaseglob
+  return $moved
+}
+
+pull_downloads() {
+  local room="$1" dest="$ROOT/$room/evidence"; mkdir -p "$dest"
+  local moved=1; moved=0
+  copy_from_dir "$DOWNLOADS" "$dest" || moved=$?
+  # also sweep common pictures folders
+  for p in "$HOME/Pictures" "$HOME/Pictures/Screenshots"; do
+    [[ -d "$p" ]] && copy_from_dir "$p" "$dest" || true
+  done
+  (( moved )) && ok "Evidence copied to $dest" || say "No new files found in Downloads/Pictures."
+}
+
+recover_trash() {
+  local room="$1" dest="$ROOT/$room/evidence"; mkdir -p "$dest"
+  if [[ ! -d "$TRASH" ]]; then say "Trash not found."; return; fi
+  shopt -s nullglob nocaseglob
+  local moved=0
+  for f in "$TRASH"/Screenshot*.* "$TRASH"/*.{png,jpg,jpeg,webp,gif,pdf,eml,txt,zip}; do
+    [[ -e "$f" ]] || continue
+    mv -v -- "$f" "$dest/" && moved=1 || true
+  done
+  shopt -u nullglob nocaseglob
+  (( moved )) && ok "Recovered files into $dest" || say "No matching files in Trash."
+}
+
+list_evidence() {
+  local room="$1" dir="$ROOT/$room/evidence"
+  [[ -d "$dir" ]] || { say "No evidence dir yet."; return; }
+  ls -lah -- "$dir"
+}
+
+git_push() {
+  local msg="${1:-evidence update}"
+  ( cd "$ROOT"
+    git add -A
+    git commit -m "$msg" || say "Nothing to commit."
+    git push
+  )
+}
+
+show_menu() {
+  cat <<'MENU'
+====== SOC Key Menu ======
+1) Set / Create current room
+2) Pull evidence from Downloads/Pictures -> evidence/
+3) Recover screenshots from Trash -> evidence/
+4) List evidence files
+5) Quick Git push (stage, commit, push)
+6) Show current room
+7) Exit
+==========================
+MENU
+}
+
+main() {
+  while true; do
+    show_menu
+    read -rp "Choose an option: " opt
+    case "${opt:-}" in
+      1) read -rp "Room name (leave blank to choose): " rn
+         if [[ -z "$rn" ]]; then rn="$(pick_room)"; else ensure_room_dir "$rn"; fi ;;
+      2) room="$(pick_room)"; pull_downloads "$room" ;;
+      3) room="$(pick_room)"; recover_trash "$room" ;;
+      4) room="$(pick_room)"; list_evidence "$room" ;;
+      5) read -rp "Commit message [evidence update]: " m; m="${m:-evidence update}"; git_push "$m" ;;
+      6) [[ -f "$CURRENT_FILE" ]] && echo "Current room: $(cat "$CURRENT_FILE")" || echo "No current room set." ;;
+      7|q|Q) exit 0 ;;
+      *) echo "Invalid option." ;;
+    esac
+  done
+}
+
+main "$@"
